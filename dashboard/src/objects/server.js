@@ -1,7 +1,6 @@
 import { defineAsyncComponent, h } from 'vue';
 import { toast } from 'vue-sonner';
 import LucideAppWindow from '~icons/lucide/app-window';
-import LucideVenetianMask from '~icons/lucide/venetian-mask';
 import ServerActions from '../components/server/ServerActions.vue';
 import { getTeam } from '../data/team';
 import router from '../router';
@@ -15,6 +14,11 @@ import { tagTab } from './common/tags';
 
 export default {
 	doctype: 'Server',
+	list: {
+		title: 'Servers',
+		route: '/servers',
+		component: () => import('../pages/servers/list/Page.vue'),
+	},
 	whitelistedMethods: {
 		increaseDiskSize: 'increase_disk_size_for_server',
 		configureAutoAddStorage: 'configure_auto_add_storage',
@@ -35,114 +39,6 @@ export default {
 		scaleDown: 'scale_down',
 		addAutomatedScalingTriggers: 'add_automated_scaling_triggers',
 		removeAutomatedScalingTriggers: 'remove_automated_scaling_triggers',
-	},
-	list: {
-		route: '/servers',
-		title: 'Servers',
-		fields: [
-			'title',
-			'database_server',
-			'plan.title as plan_title',
-			'plan.price_usd as price_usd',
-			'plan.price_inr as price_inr',
-			'cluster.image as cluster_image',
-			'cluster.title as cluster_title',
-			'is_unified_server',
-		],
-		searchField: 'title',
-		filterControls() {
-			return [
-				{
-					type: 'select',
-					label: 'Status',
-					fieldname: 'status',
-					options: ['', 'Active', 'Pending', 'Archived'],
-				},
-				{
-					type: 'select',
-					label: 'Region',
-					fieldname: 'cluster',
-					options: [
-						'',
-						'Bahrain',
-						'Cape Town',
-						'Frankfurt',
-						'KSA',
-						'London',
-						'Mumbai',
-						'Singapore',
-						'UAE',
-						'Virginia',
-						'Zurich',
-					],
-				},
-			];
-		},
-		orderBy: 'creation desc',
-		columns: [
-			{
-				label: 'Server',
-				fieldname: 'name',
-				width: 1.5,
-				class: 'font-medium',
-				format(value, row) {
-					return row.title || value;
-				},
-			},
-			{ label: 'Status', fieldname: 'status', type: 'Badge', width: 0.8 },
-			{
-				label: 'App Server Plan',
-				format(value, row) {
-					return planTitle(row);
-				},
-			},
-			{
-				label: 'Database Server Plan',
-				fieldname: 'db_plan',
-				format(value, row) {
-					if (!value || row.is_unified_server) return '';
-					return planTitle(value);
-				},
-			},
-			{
-				label: 'Region',
-				fieldname: 'cluster',
-				format(value, row) {
-					return row.cluster_title || value;
-				},
-				prefix(row) {
-					return h('img', {
-						src: row.cluster_image,
-						class: 'w-4 h-4',
-						alt: row.cluster_title,
-					});
-				},
-			},
-		],
-		primaryAction({ listResource: servers }) {
-			return {
-				label: 'New Server',
-				variant: 'solid',
-				slots: {
-					prefix: icon('plus'),
-				},
-				onClick() {
-					router.push({ name: 'New Server' });
-				},
-			};
-		},
-		banner({ listResource: servers }) {
-			if (!servers.data?.length) {
-				return {
-					title: 'Learn how to create a new dedicated server',
-					button: {
-						label: 'Read docs',
-						variant: 'outline',
-						link: 'https://docs.frappe.io/cloud/servers/new',
-					},
-				};
-			}
-		},
 	},
 	detail: {
 		titleField: 'name',
@@ -176,7 +72,9 @@ export default {
 					label: 'Impersonate Server Owner',
 					title: 'Impersonate Server Owner', // for label to pop-up on hover
 					slots: {
-						icon: icon(LucideVenetianMask),
+						icon: defineAsyncComponent(
+							() => import('~icons/lucide/venetian-mask'),
+						),
 					},
 					condition: () =>
 						$team.doc?.is_desk_user && server.doc.team !== $team.name,
@@ -329,6 +227,16 @@ export default {
 								options: ['', 'Active', 'Inactive', 'Suspended', 'Broken'],
 							},
 							{
+								type: 'select',
+								label: 'Plan',
+								fieldname: 'plan.support_included',
+								options: [
+									{ label: 'All', value: null },
+									{ label: 'Supported', value: '1' },
+									{ label: 'Not Supported', value: '0' },
+								],
+							},
+							{
 								type: 'link',
 								label: 'Version',
 								fieldname: 'group.version',
@@ -338,7 +246,7 @@ export default {
 							},
 							{
 								type: 'link',
-								label: 'Bench Group',
+								label: 'Benches',
 								fieldname: 'group',
 								options: {
 									doctype: 'Release Group',
@@ -389,7 +297,7 @@ export default {
 							},
 						},
 						{
-							label: 'Bench Group',
+							label: 'Bench',
 							fieldname: 'group_title',
 							width: '15rem',
 						},
@@ -399,10 +307,25 @@ export default {
 							width: 0.5,
 						},
 					],
+					primaryAction({ documentResource: server }) {
+						if (server?.doc?.status !== 'Active') return {};
+						return {
+							label: 'New Site',
+							slots: {
+								prefix: icon('plus'),
+							},
+							onClick() {
+								router.push({
+									name: 'Server New Site',
+									params: { server: server.doc.name },
+								});
+							},
+						};
+					},
 				},
 			},
 			{
-				label: 'Bench Groups',
+				label: 'Benches',
 				icon: icon('package'),
 				condition: (server) => {
 					return server.doc?.status !== 'Archived';
@@ -478,7 +401,7 @@ export default {
 					primaryAction({ listResource: benches, documentResource: server }) {
 						if (server?.doc?.status !== 'Active') return {};
 						return {
-							label: 'New Bench Group',
+							label: 'New Bench',
 							slots: {
 								prefix: icon('plus'),
 							},
@@ -647,9 +570,7 @@ export default {
 									h(
 										defineAsyncComponent(
 											() =>
-												import(
-													'../components/server/ServerNewSnapshotDialog.vue'
-												),
+												import('../components/server/ServerNewSnapshotDialog.vue'),
 										),
 										{
 											server: server.name,
@@ -669,9 +590,7 @@ export default {
 								onClick() {
 									let ServerSnapshotDetailsDialog = defineAsyncComponent(
 										() =>
-											import(
-												'../components/server/ServerSnapshotDetailsDialog.vue'
-											),
+											import('../components/server/ServerSnapshotDetailsDialog.vue'),
 									);
 									renderDialog(
 										h(ServerSnapshotDetailsDialog, {
@@ -686,9 +605,7 @@ export default {
 								onClick() {
 									let ServerSnapshotRecoverSitesDialog = defineAsyncComponent(
 										() =>
-											import(
-												'../components/server/ServerSnapshotRecoverSitesDialog.vue'
-											),
+											import('../components/server/ServerSnapshotRecoverSitesDialog.vue'),
 									);
 									renderDialog(
 										h(ServerSnapshotRecoverSitesDialog, {
@@ -942,6 +859,25 @@ export default {
 					};
 				},
 			},
+			{
+				label: 'Firewall',
+				icon: icon('shield'),
+				condition: (server) => {
+					return (
+						server.doc?.status !== 'Archived' && !server.doc?.is_self_hosted
+					);
+				},
+				route: 'firewall',
+				type: 'Component',
+				component: defineAsyncComponent(
+					() => import('../components/server/ServerFirewall.vue'),
+				),
+				props: (server) => {
+					return {
+						id: server.doc.name,
+					};
+				},
+			},
 			tagTab('Server'),
 			{
 				label: 'Activity',
@@ -978,7 +914,7 @@ export default {
 						{
 							label: 'Description',
 							fieldname: 'reason',
-							class: 'text-gray-600',
+							class: 'text-ink-gray-6',
 						},
 						{
 							label: '',
@@ -1002,6 +938,84 @@ export default {
 									'Terminated',
 									'Incident',
 									'Disk Size Change',
+								],
+							},
+						];
+					},
+				},
+			},
+
+			{
+				label: 'Plan History',
+				icon: icon('credit-card'),
+				route: 'plan-history',
+				type: 'list',
+				list: {
+					doctype: 'Plan Change',
+					filters: (server) => {
+						return {
+							document_name: [
+								'in',
+								[server.doc?.name, server.doc?.database_server].filter(Boolean),
+							],
+						};
+					},
+					fields: ['from_plan', 'to_plan', 'type', 'timestamp', 'owner', 'document_type'],
+					orderBy: 'timestamp desc',
+					columns: [
+						{
+							label: 'Server Type',
+							fieldname: 'document_type',
+							format(value) {
+								if (value === 'Server') return 'Application Server';
+								if (value === 'Database Server') return 'Database Server';
+								return value || '—';
+							},
+						},
+						{
+							label: 'Changed From',
+							fieldname: 'from_plan',
+							class: 'text-gray-600',
+							format(value) {
+								return value || '—';
+							},
+						},
+						{
+							label: 'Changed To',
+							fieldname: 'to_plan',
+						},
+						{
+							label: 'Type',
+							fieldname: 'type',
+							type: 'Badge',
+							theme(value) {
+								if (value === 'Upgrade') return 'green';
+								if (value === 'Downgrade') return 'red';
+								return 'gray';
+							},
+						},
+						{
+							label: 'Changed By',
+							fieldname: 'owner',
+							class: 'text-gray-600',
+						},
+						{
+							label: 'Date',
+							fieldname: 'timestamp',
+							type: 'Timestamp',
+							align: 'right',
+						},
+					],
+					filterControls() {
+						return [
+							{
+								type: 'select',
+								label: 'Server Type',
+								fieldname: 'document_type',
+								options: [
+									{ label: 'All', value: null },
+									{ label: 'Application Server', value: 'Server' },
+									{ label: 'Database Server', value: 'Database Server' },
 								],
 							},
 						];
