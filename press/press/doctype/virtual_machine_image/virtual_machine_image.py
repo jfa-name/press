@@ -20,6 +20,8 @@ from oci.core.models.image_source_via_object_storage_uri_details import (
 from tenacity import retry, stop_after_attempt, wait_fixed
 from tenacity.retry import retry_if_result
 
+from press.frappe_compute_client.client import Client as FrappeComputeClient
+
 
 class VirtualMachineImage(Document):
 	# begin: auto-generated types
@@ -62,7 +64,9 @@ class VirtualMachineImage(Document):
 		if (
 			self.cloud_provider == "Hetzner" or self.cloud_provider == "DigitalOcean"
 		) and self.has_data_volume:
-			frappe.throw("Hetzner Virtual Machine Images cannot have data volumes.")
+			frappe.throw(
+				"Hetzner and Digital Ocean machine images can't include data volumes. Please create the image without a data volume, or use an AWS EC2 machine."
+			)
 
 		if self.cloud_provider == "DigitalOcean":
 			snapshots = self.client.droplets.list_snapshots(self.instance_id)
@@ -135,17 +139,34 @@ class VirtualMachineImage(Document):
 			)
 			action = action["action"]
 			self.action_id = action["id"]
+
+		elif cluster.cloud_provider == "Frappe Compute":
+			self.image_id = self.client.create_virtual_machine_image(self.instance_id)
+
 		self.sync()
 
 	def create_image_from_copy(self):
-		source = frappe.get_doc("Virtual Machine Image", self.copied_from)
-		response = self.client.copy_image(
-			Name=f"Frappe Cloud {self.name} - {self.virtual_machine}",
-			SourceImageId=source.image_id,
-			SourceRegion=source.region,
-		)
-		self.image_id = response["ImageId"]
-		self.sync()
+		if self.cloud_provider == "AWS EC2":
+			source = frappe.get_doc("Virtual Machine Image", self.copied_from)
+			response = self.client.copy_image(
+				Name=f"Frappe Cloud {self.name} - {self.virtual_machine}",
+				SourceImageId=source.image_id,
+				SourceRegion=source.region,
+			)
+			self.image_id = response["ImageId"]
+			self.sync()
+
+		elif self.cloud_provider == "DigitalOcean":
+			action = self.client.image_actions.post(
+				self.image_id,
+				{"type": "transfer", "region": frappe.db.get_value("Cluster", self.cluster, "region")},
+			)
+			action = action["action"]
+			self.action_id = action["id"]
+			self.sync()
+
+		else:
+			raise NotImplementedError("Copying images is only supported for AWS EC2 and DigitalOcean.")
 
 	def set_credentials(self):
 		if (self.series == "m" or self.series == "u") and frappe.db.exists(
@@ -221,21 +242,42 @@ class VirtualMachineImage(Document):
 				else:
 					raise e
 		elif cluster.cloud_provider == "DigitalOcean":
-			action_status = self.client.droplet_actions.get(
-				droplet_id=self.instance_id, action_id=self.action_id
-			)
-			action_status = action_status["action"]["status"]
-			self.status = self.get_digital_ocean_status_map(action_status)
+			if self.copied_from:
+				action_status = self.client.image_actions.get(
+					action_id=self.action_id,
+					image_id=frappe.db.get_value("Virtual Machine Image", self.copied_from, "image_id"),
+				)
+			else:
+				action_status = self.client.droplet_actions.get(
+					droplet_id=self.instance_id, action_id=self.action_id
+				)
+
+			status = action_status["action"]["status"]
+			self.status = self.get_digital_ocean_status_map(status)
 
 			if self.status == "Available":
-				images = self.client.droplets.list_snapshots(self.instance_id)["snapshots"]
-				image = images[
-					0
-				]  # Machine get's one snapshot only and when action is completed we will have an image
+				if self.copied_from:
+					images = self.client.snapshots.get(action_status["action"]["resource_id"]).get("snapshot")
+				else:
+					virtual_machine_status = frappe.db.get_value(
+						"Virtual Machine", self.virtual_machine, "status"
+					)
+					if virtual_machine_status == "Terminated":
+						images = self.client.snapshots.get(self.image_id).get("snapshot")
+					else:
+						# We need this since the image ID might not be ready immediately after creation
+						images = self.client.droplets.list_snapshots(self.instance_id).get("snapshots")
+
+				image = images[0] if isinstance(images, list) else images
 				self.image_id = image["id"]
 				self.size = image["min_disk_size"]
 				self.root_size = image["min_disk_size"]
 
+		elif cluster.cloud_provider == "Frappe Compute":
+			image = self.client.sync_virtual_machine_image(self.image_id)
+			self.root_size = image.size
+			self.size = image.size
+			self.status = image.status
 		self.save()
 		return self.status
 
@@ -331,6 +373,12 @@ class VirtualMachineImage(Document):
 			return Client(token=api_token)
 		if cluster.cloud_provider == "DigitalOcean":
 			return pydo.Client(token=cluster.get_password("digital_ocean_api_token"))
+		if cluster.cloud_provider == "Frappe Compute":
+			return FrappeComputeClient(
+				url=cluster.frappe_compute_base_url,
+				api_key=cluster.frappe_compute_api_key,
+				api_secret=cluster.get_password("frappe_compute_api_secret"),
+			)
 		return None
 
 	@classmethod
