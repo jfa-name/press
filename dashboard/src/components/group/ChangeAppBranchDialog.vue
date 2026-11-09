@@ -7,55 +7,57 @@
 			<div class="flex flex-col items-center gap-2 w-full">
 				<LoadingText class="my-4" v-if="$resources.branches.loading" />
 
-				<!-- Branch Selector -->
-				<FormControl
-					v-if="!useOtherBranch"
-					class="w-full"
-					label="Select Branch"
-					type="select"
-					:options="$resources.branches.data"
-					v-model="selectedBranch"
-				/>
+				<template v-else>
+					<!-- Branch Selector -->
+					<FormControl
+						v-if="!useOtherBranch"
+						class="w-full"
+						label="Select Branch"
+						type="select"
+						:options="$resources.branches.data"
+						v-model="selectedBranch"
+					/>
 
-				<!-- Other Branch Input -->
-				<FormControl
-					v-else
-					class="w-full"
-					label="Branch Name"
-					type="text"
-					placeholder="Enter branch name"
-					v-model="otherBranchName"
-				/>
+					<!-- Other Branch Input -->
+					<FormControl
+						v-else
+						class="w-full"
+						label="Branch Name"
+						type="text"
+						placeholder="Enter branch name"
+						v-model="otherBranchName"
+					/>
 
-				<!-- Other branches toggle -->
-				<FormControl
-					type="checkbox"
-					label="Other branches"
-					v-model="useOtherBranch"
-					class="self-start"
-				/>
+					<!-- Other branches toggle -->
+					<FormControl
+						type="checkbox"
+						label="Other branches"
+						v-model="useOtherBranch"
+						class="self-start"
+					/>
 
-				<!-- GitHub verification error -->
-				<span
-					v-if="branchVerificationError"
-					class="text-sm text-red-600 w-full mt-3"
-				>
-					{{ branchVerificationError }}
-				</span>
+					<!-- GitHub verification error -->
+					<span
+						v-if="branchVerificationError"
+						class="text-sm text-red-600 w-full mt-3"
+					>
+						{{ branchVerificationError }}
+					</span>
 
-				<!-- GitHub verification error -->
-				<span
-					v-else-if="branchVerificationSuccess"
-					class="text-sm text-green-600 w-full mt-3"
-				>
-					{{ branchVerificationSuccess }}
-				</span>
+					<!-- GitHub verification error -->
+					<span
+						v-else-if="branchVerificationSuccess"
+						class="text-sm text-green-600 w-full mt-3"
+					>
+						{{ branchVerificationSuccess }}
+					</span>
 
-				<ErrorMessage
-					v-if="$resources.changeBranch?.error"
-					class="mt-2 w-full"
-					:message="$resources.changeBranch.error"
-				/>
+					<ErrorMessage
+						v-if="$resources.changeBranch?.error"
+						class="mt-2 w-full"
+						:message="$resources.changeBranch.error"
+					/>
+				</template>
 			</div>
 		</template>
 
@@ -121,6 +123,7 @@ export default {
 		otherBranchName() {
 			this.otherBranchValidated = false;
 			this.branchVerificationError = null;
+			this.branchVerificationSuccess = null;
 		},
 	},
 
@@ -137,6 +140,12 @@ export default {
 				transform(data) {
 					return data.map((d) => d.name);
 				},
+			};
+		},
+
+		validateBranchUsingInstallation() {
+			return {
+				url: 'press.api.bench.validate_branch',
 			};
 		},
 
@@ -166,13 +175,11 @@ export default {
 			this.validatingBranch = true;
 			this.branchVerificationError = null;
 			try {
-				const res = await fetch(
-					`https://api.github.com/repos/${this.app.repository_owner}/${this.app.repository}/branches/${this.otherBranchName}`,
-				);
-
-				if (!res.ok) {
-					throw new Error('Branch not found');
-				}
+				await this.$resources.validateBranchUsingInstallation.submit({
+					name: this.bench,
+					app: this.app.name,
+					branch: this.otherBranchName.trim(),
+				});
 
 				this.otherBranchValidated = true;
 				this.branchVerificationSuccess = 'Branch validated successfully';
@@ -189,7 +196,7 @@ export default {
 				name: this.bench,
 				app: this.app.name,
 				to_branch: this.useOtherBranch
-					? this.otherBranchName
+					? this.otherBranchName.trim()
 					: this.selectedBranch,
 			});
 		},
