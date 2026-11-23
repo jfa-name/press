@@ -572,9 +572,8 @@ def populate_output_cache(polled_job, job):
 def filter_active_servers(servers):
 	# Prepare list of all_active_servers for each server_type
 	# Return servers that are in all_active_servers
-	server_types = [server.server_type for server in servers]
 	all_active_servers = {}
-	for server_type in server_types:
+	for server_type in {server.server_type for server in servers}:
 		all_active_servers[server_type] = set(frappe.get_all(server_type, {"status": "Active"}, pluck="name"))
 
 	active_servers = []
@@ -635,29 +634,29 @@ def fail_old_jobs():
 			process_job_updates(job)
 		frappe.db.commit()
 
-	failed_jobs = frappe.db.get_values(
+	failed_jobs = frappe.db.get_all(
 		"Agent Job",
 		{
 			"status": ("in", ["Pending", "Running"]),
 			"job_id": ("!=", 0),
 			"creation": ("<", add_days(None, -2)),
 		},
-		"name",
 		limit=100,
-		pluck=True,
+		order_by="RAND()",
+		pluck="name",
 	)
 	update_status(failed_jobs, "Failure")
 
-	delivery_failed_jobs = frappe.db.get_values(
+	delivery_failed_jobs = frappe.db.get_all(
 		"Agent Job",
 		{
 			"job_id": 0,
 			"creation": ("<", add_days(None, -2)),
 			"status": ("!=", "Delivery Failure"),
 		},
-		"name",
 		limit=100,
-		pluck=True,
+		order_by="RAND()",
+		pluck="name",
 	)
 
 	update_status(delivery_failed_jobs, "Delivery Failure")
@@ -808,7 +807,9 @@ def retry_undelivered_jobs(server):
 		if delivered_jobs:
 			update_job_ids_for_delivered_jobs(delivered_jobs)
 
-		undelivered_jobs = list(set(server_jobs[server]) - set(delivered_jobs))
+		undelivered_jobs = list(
+			set(server_jobs[server]) - set([job["agent_job_id"] for job in delivered_jobs])
+		)
 
 		for job_name in undelivered_jobs:
 			job = AgentJob("Agent Job", job_name)
@@ -940,6 +941,12 @@ def update_job_ids_for_delivered_jobs(delivered_jobs):
 		)
 
 
+def is_site_archived(site: str | None) -> bool:
+	if not site:
+		return False
+	return frappe.db.get_value("Site", site, "status") == "Archived"
+
+
 def process_job_updates(job_name: str, response_data: dict | None = None):  # noqa: C901
 	job: "AgentJob" = frappe.get_doc("Agent Job", job_name)
 	start = now_datetime()
@@ -1003,6 +1010,7 @@ def process_job_updates(job_name: str, response_data: dict | None = None):  # no
 			process_migrate_site_job_update,
 			process_move_site_to_bench_job_update,
 			process_new_site_job_update,
+			process_refresh_database_usage_job_update,
 			process_reinstall_site_job_update,
 			process_rename_site_job_update,
 			process_restore_job_update,
@@ -1026,7 +1034,11 @@ def process_job_updates(job_name: str, response_data: dict | None = None):  # no
 
 		site_migration = get_ongoing_migration(job.site)
 		if site_migration:
-			process_site_migration_job_update(job, site_migration)
+			process_site_migration_job_update(
+				job, site_migration
+			)  # has to be at top to prevent regular callbacks from running
+		elif is_site_archived(job.site):
+			return
 		elif job.job_type == "Add Upstream to Proxy":
 			process_new_server_job_update(job)
 		elif job.job_type == "New Bench":
@@ -1095,6 +1107,8 @@ def process_job_updates(job_name: str, response_data: dict | None = None):  # no
 			AppPatch.process_patch_app(job)
 		elif job.job_type == "Run Remote Builder":
 			DeployCandidateBuild.process_run_build(job, response_data)
+		elif job.job_type == "Run Patch Build":
+			DeployCandidateBuild.process_run_patch_build(job, response_data)
 		elif job.job_type == "Create User":
 			process_create_user_job_update(job)
 		elif job.job_type == "Complete Setup Wizard":
@@ -1141,6 +1155,8 @@ def process_job_updates(job_name: str, response_data: dict | None = None):  # no
 			process_backup_database_from_snapshot_job_callback(job)
 		elif job.job_type == "Backup Files From Snapshot":
 			process_backup_files_from_snapshot_job_callback(job)
+		elif job.job_type == "Refresh Database Usage":
+			process_refresh_database_usage_job_update(job)
 
 		# send failure notification if job failed
 		if job.status == "Failure":

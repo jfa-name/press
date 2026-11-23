@@ -5,9 +5,17 @@
 			size: 'xl',
 			actions: [
 				{
-					label: isAppOnBench ? 'Update App' : 'Add App',
+					label: isAppOnBench
+						? 'Update App'
+						: $resources.validateApp.loading
+							? `Validating branch '${selectedBranch?.value}'`
+							: 'Add App',
 					variant: 'solid',
-					disabled: !app || !appValidated,
+					disabled:
+						!app ||
+						!appValidated ||
+						$resources.validateApp.loading ||
+						!selectedBranch?.value,
 					onClick: addAppHandler,
 				},
 			],
@@ -49,25 +57,13 @@
 										})
 									"
 								/>
-								<FormControl
+								<Combobox
 									v-else
-									type="combobox"
 									:options="branchOptions"
 									:modelValue="selectedBranch?.value"
-									@update:modelValue="
-										selectedBranch = branchOptions.find(
-											(option) => option.value === $event,
-										)
-									"
-								>
-									<template v-slot:target="{ togglePopover }">
-										<Button
-											:label="selectedBranch?.value || selectedBranch"
-											icon-right="chevron-down"
-											@click="() => togglePopover()"
-										/>
-									</template>
-								</FormControl>
+									allow-custom-value
+									@update:modelValue="onChangeBranchDebounce"
+								/>
 							</div>
 						</div>
 						<div v-else-if="tab.value === 'your-github-app'" class="pt-4">
@@ -78,15 +74,15 @@
 						</div>
 						<div class="mt-4 space-y-2">
 							<div
-								v-if="$resources.validateApp.loading && !appValidated"
-								class="flex text-base text-gray-700"
+								v-if="$resources.validateApp.loading"
+								class="flex text-base text-ink-gray-7"
 							>
 								<LoadingIndicator class="mr-2 w-4" />
 								Validating app...
 							</div>
 							<div
-								v-if="appValidated && app"
-								class="flex text-base text-gray-700"
+								v-else-if="appValidated && app"
+								class="flex text-base text-ink-gray-7"
 							>
 								<GreenCheckIcon class="mr-2 w-4" />
 								Found {{ app.title }} ({{ app.name }})
@@ -114,7 +110,7 @@
 </template>
 
 <script>
-import { FormControl, Tabs } from 'frappe-ui';
+import { Combobox, debounce, FormControl, Tabs } from 'frappe-ui';
 import { DashboardError } from '../utils/error';
 import GitHubAppSelector from './GitHubAppSelector.vue';
 import AlertBanner from './AlertBanner.vue';
@@ -126,6 +122,7 @@ export default {
 		FTabs: Tabs,
 		FormControl,
 		AlertBanner,
+		Combobox,
 	},
 	props: {
 		group: {
@@ -134,6 +131,11 @@ export default {
 		},
 	},
 	emits: ['app-added'],
+	created() {
+		this.onChangeBranchDebounce = debounce((val) => {
+			this.selectedBranch = { label: val, value: val };
+		}, 500);
+	},
 	data() {
 		return {
 			show: true,
@@ -165,13 +167,14 @@ export default {
 			this.selectedGithubUser = null;
 			this.selectedGithubRepository = null;
 			this.$resources.branches.reset();
+			this.$resources.validateApp.reset();
 		},
 		githubAppLink() {
 			this.selectedBranch = '';
 			this.appValidated = false;
 		},
 		selectedBranch(newSelectedBranch) {
-			if (this.appOwner && this.appName && newSelectedBranch)
+			if (this.appOwner && this.appName && newSelectedBranch?.value)
 				this.$resources.validateApp.submit({
 					owner: this.appOwner,
 					repository: this.appName,
@@ -205,17 +208,16 @@ export default {
 						branch: this.selectedBranch.value,
 					};
 				},
+				onError() {
+					this.appValidated = false;
+				},
 			};
 		},
 		branches() {
 			return {
 				url: 'press.api.github.branches',
 				validate() {
-					const githubUrlRegex =
-						/^(https?:\/\/)?(www\.)?github\.com\/([a-zA-Z0-9_.\-]+)\/([a-zA-Z0-9_.\-]+)(\/)?$/;
-					const isValidUrl = githubUrlRegex.test(this.githubAppLink);
-
-					if (!isValidUrl) {
+					if (!this.githubUrlMatch) {
 						throw new DashboardError('Please enter a valid github link');
 					}
 				},
@@ -230,20 +232,19 @@ export default {
 		},
 	},
 	computed: {
+		githubUrlMatch() {
+			const githubUrlRegex =
+				/^(https?:\/\/)?(www\.)?github\.com\/([a-zA-Z0-9_.\-]+)\/([a-zA-Z0-9_.\-]+)(\/)?$/;
+			return this.githubAppLink.match(githubUrlRegex);
+		},
 		appOwner() {
 			if (this.tabIndex === 0) {
-				const urlParts = this.githubAppLink.split('/');
-				if (urlParts.length < 4) return;
-
-				return urlParts[3];
+				return this.githubUrlMatch?.[3];
 			}
 		},
 		appName() {
 			if (this.tabIndex === 0) {
-				const urlParts = this.githubAppLink.split('/');
-				if (urlParts.length < 5) return;
-
-				return urlParts[4].replace('.git', '');
+				return this.githubUrlMatch?.[4]?.replace('.git', '');
 			}
 		},
 		branchOptions() {
